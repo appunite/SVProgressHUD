@@ -15,8 +15,13 @@ SVProgressHUD features:
 
 h2. Installation
 
-* Drag the @SVProgressHUD/SVProgressHUD@ folder into your project. 
-* Add the *QuartzCore* framework to your project. 
+* git submodule add git@github.com:appunite/SVProgressHUD.git Frameworks/SVProgressHUD
+* open Frameworkds/SVProgressHUD/SVPProgressHUD
+* drag SVProgressHUD.xcodeproj to your project Frameworks group in Xcode
+* click on your Project -> select target -> Build settings -> Other Linker Flags -> add "-ObjC"
+* click on your Project -> select target -> Build settings -> Header Search Path -> add "$(SOURCE_ROOT)/Frameworks/SVProgressHUD/SVProgressHUD/"
+* click on your Project -> select target -> Build phases -> add "Target Dependences" -> select "SVProgressHUD"
+* click on your Project -> select target -> Build phases -> add "Link Binary With Libraries"" -> select "libSVProgressHUD.a""
 
 __If you plan on using SVProgressHUD in a lot of places inside your app, I recommend importing it directly inside your prefix file.__
 
