@@ -6,9 +6,14 @@
 //
 //  https://github.com/samvermette/SVProgressHUD
 //
+// Portions of code by Marcel Müller
+// Portions of code by Barrett Jacobsen
+
 
 #import "SVProgressHUD.h"
 #import <QuartzCore/QuartzCore.h>
+
+@class SVProgressBarView;
 
 #ifdef SVPROGRESSHUD_DISABLE_NETWORK_INDICATOR
 #define SVProgressHUDShowNetworkIndicator 0
@@ -20,19 +25,26 @@
 
 @property (nonatomic, readwrite) SVProgressHUDMaskType maskType;
 @property (nonatomic, readwrite) BOOL showNetworkIndicator;
-@property (nonatomic, strong) NSTimer *fadeOutTimer;
-@property (nonatomic, strong, readonly) UIView *hudView;
-@property (nonatomic, strong, readonly) UILabel *stringLabel;
-@property (nonatomic, strong, readonly) UIImageView *imageView;
-@property (nonatomic, strong, readonly) UIActivityIndicatorView *spinnerView;
-@property (nonatomic, strong) UIWindow *previousKeyWindow;
+@property (nonatomic, retain) NSTimer *fadeOutTimer;
+
+@property (nonatomic, readonly) UIWindow *overlayWindow;
+@property (nonatomic, readonly) UIView *hudView;
+@property (nonatomic, readonly) UILabel *stringLabel;
+@property (nonatomic, readonly) UIImageView *imageView;
+@property (nonatomic, readonly) UIActivityIndicatorView *spinnerView;
+@property (nonatomic, assign) UIWindow *previousKeyWindow;
 @property (nonatomic, readonly) CGFloat visibleKeyboardHeight;
 
-- (void)showWithStatus:(NSString*)string maskType:(SVProgressHUDMaskType)hudMaskType networkIndicator:(BOOL)show;
+@property (nonatomic, readonly) SVProgressBarView *progressBarView;
+
+- (void)showWithStatus:(NSString*)string maskType:(SVProgressHUDMaskType)hudMaskType indicatorType:(SVProgressHUDIndicatorType)indicatorType networkIndicator:(BOOL)show;
 - (void)setStatus:(NSString*)string;
 - (void)registerNotifications;
 - (void)moveToPoint:(CGPoint)newCenter rotateAngle:(CGFloat)angle;
 - (void)positionHUD:(NSNotification*)notification;
+
+- (void)setProgress:(CGFloat)progress;
+- (CGFloat)progress;
 
 - (void)dismiss;
 - (void)dismissWithStatus:(NSString*)string error:(BOOL)error;
@@ -40,21 +52,30 @@
 
 @end
 
+#pragma mark - SVProgressBarView Interface
+
+@interface SVProgressBarView : UIView {
+	CGFloat progress;
+}
+@property (nonatomic, assign) CGFloat progress;
+@end
+
+
+#pragma mark - SVProgressHud Implementation
+
+
 
 @implementation SVProgressHUD
 
-@synthesize hudView, maskType, showNetworkIndicator, fadeOutTimer, stringLabel, imageView, spinnerView, previousKeyWindow, visibleKeyboardHeight;
+@synthesize hudView, maskType, showNetworkIndicator, fadeOutTimer, stringLabel, imageView, spinnerView, progressBarView, previousKeyWindow, visibleKeyboardHeight, overlayWindow;
 
 static SVProgressHUD *sharedView = nil;
 
 - (void)dealloc {
 	
-	if(fadeOutTimer != nil)
-		[fadeOutTimer invalidate], fadeOutTimer = nil;
-	
+	self.fadeOutTimer = nil;
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
-
 
 + (SVProgressHUD*)sharedView {
 	
@@ -83,6 +104,10 @@ static SVProgressHUD *sharedView = nil;
     [SVProgressHUD showWithStatus:nil maskType:maskType networkIndicator:SVProgressHUDShowNetworkIndicator];
 }
 
++ (void)showWithIndicatorType:(SVProgressHUDIndicatorType)indicatorType {
+    [SVProgressHUD showWithStatus:nil maskType:SVProgressHUDMaskTypeNone indicatorType:indicatorType networkIndicator:SVProgressHUDShowNetworkIndicator];
+}
+
 + (void)showWithStatus:(NSString*)status maskType:(SVProgressHUDMaskType)maskType {
     [SVProgressHUD showWithStatus:status maskType:maskType networkIndicator:SVProgressHUDShowNetworkIndicator];
 }
@@ -96,7 +121,11 @@ static SVProgressHUD *sharedView = nil;
 }
 
 + (void)showWithStatus:(NSString*)status maskType:(SVProgressHUDMaskType)maskType networkIndicator:(BOOL)show {
-    [[SVProgressHUD sharedView] showWithStatus:status maskType:maskType networkIndicator:show];
+    [SVProgressHUD showWithStatus:status maskType:maskType indicatorType:SVProgressHUDIndicatorTypeSpinner networkIndicator:show];
+}
+
++ (void)showWithStatus:(NSString*)status maskType:(SVProgressHUDMaskType)maskType indicatorType:(SVProgressHUDIndicatorType)indicatorType networkIndicator:(BOOL)show {
+    [[SVProgressHUD sharedView] showWithStatus:status maskType:maskType indicatorType:indicatorType networkIndicator:show];
 }
 
 + (void)showSuccessWithStatus:(NSString *)string {
@@ -104,6 +133,14 @@ static SVProgressHUD *sharedView = nil;
     [SVProgressHUD dismissWithSuccess:string afterDelay:1];
 }
 
+#pragma mark - Progress
++ (void)setProgress:(CGFloat)progress {
+    [SVProgressHUD sharedView].progress = progress;
+}
+
++ (CGFloat)progress {
+    return [SVProgressHUD sharedView].progress;
+}
 
 #pragma mark - Deprecated show methods
 
@@ -155,6 +192,7 @@ static SVProgressHUD *sharedView = nil;
 - (id)initWithFrame:(CGRect)frame {
 	
     if ((self = [super initWithFrame:frame])) {
+        [self.overlayWindow addSubview:self];
 		self.userInteractionEnabled = NO;
         self.backgroundColor = [UIColor clearColor];
 		self.alpha = 0;
@@ -195,6 +233,14 @@ static SVProgressHUD *sharedView = nil;
     }
 }
 
+- (void)setProgress:(CGFloat)progress {
+    self.progressBarView.progress = progress;
+}
+
+- (CGFloat)progress {
+    return self.progressBarView.progress;
+}
+
 - (void)setStatus:(NSString *)string {
 	
     CGFloat hudWidth = 100;
@@ -223,25 +269,28 @@ static SVProgressHUD *sharedView = nil;
 	
 	self.hudView.bounds = CGRectMake(0, 0, hudWidth, hudHeight);
 	
+    self.progressBarView.bounds = CGRectMake(0, 0, ceil(self.hudView.bounds.size.width - 20), 20);
+    
 	self.imageView.center = CGPointMake(CGRectGetWidth(self.hudView.bounds)/2, 36);
 	
 	self.stringLabel.hidden = NO;
 	self.stringLabel.text = string;
 	self.stringLabel.frame = labelRect;
 	
-	if(string)
+	if(string) {
 		self.spinnerView.center = CGPointMake(ceil(CGRectGetWidth(self.hudView.bounds)/2)+0.5, 40.5);
-	else
+        self.progressBarView.center = CGPointMake(ceil(CGRectGetWidth(self.hudView.bounds)/2), 40);
+    }
+	else {
 		self.spinnerView.center = CGPointMake(ceil(CGRectGetWidth(self.hudView.bounds)/2)+0.5, ceil(self.hudView.bounds.size.height/2)+0.5);
+		self.progressBarView.center = CGPointMake(ceil(CGRectGetWidth(self.hudView.bounds)/2), ceil(self.hudView.bounds.size.height/2));
+    }
 }
 
 
-- (void)showWithStatus:(NSString*)string maskType:(SVProgressHUDMaskType)hudMaskType networkIndicator:(BOOL)show {
+- (void)showWithStatus:(NSString*)string maskType:(SVProgressHUDMaskType)hudMaskType indicatorType:(SVProgressHUDIndicatorType)indicatorType networkIndicator:(BOOL)show {
     
-	if(fadeOutTimer != nil)
-		[fadeOutTimer invalidate], fadeOutTimer = nil;
-	
-    self.showNetworkIndicator = show;
+	self.fadeOutTimer = nil;
     
     if(self.showNetworkIndicator)
         [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
@@ -250,26 +299,23 @@ static SVProgressHUD *sharedView = nil;
     self.maskType = hudMaskType;
 	
 	[self setStatus:string];
-	[self.spinnerView startAnimating];
+    
+    if (indicatorType == SVProgressHUDIndicatorTypeSpinner) {
+        self.progressBarView.hidden = YES;
+        self.spinnerView.hidden = NO;
+        [self.spinnerView startAnimating];
+    }
+    else if (indicatorType == SVProgressHUDIndicatorTypeProgressBar) {
+        self.spinnerView.hidden = YES;
+        self.progressBarView.hidden = NO;
+    }
     
     if(self.maskType != SVProgressHUDMaskTypeNone)
         self.userInteractionEnabled = YES;
     else
         self.userInteractionEnabled = NO;
     
-    if(![self isKeyWindow]) {
-        
-        [[UIApplication sharedApplication].windows enumerateObjectsWithOptions:NSEnumerationReverse usingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
-            UIWindow *window = (UIWindow*)obj;
-            if(window.windowLevel == UIWindowLevelNormal && ![[window class] isEqual:[SVProgressHUD class]]) {
-                self.previousKeyWindow = window;
-                *stop = YES;
-            }
-        }];
-         
-        [self makeKeyAndVisible];
-    }
-    
+    [self.overlayWindow makeKeyAndVisible];
     [self positionHUD:nil];
     
 	if(self.alpha != 1) {
@@ -287,6 +333,12 @@ static SVProgressHUD *sharedView = nil;
 	}
     
     [self setNeedsDisplay];
+}
+
+- (void)setFadeOutTimer:(NSTimer *)newTimer {
+    
+    if(fadeOutTimer)
+        [fadeOutTimer invalidate],  fadeOutTimer = nil;
 }
 
 
@@ -323,32 +375,41 @@ static SVProgressHUD *sharedView = nil;
     CGFloat keyboardHeight;
     double animationDuration;
     
+    UIInterfaceOrientation orientation = [[UIApplication sharedApplication] statusBarOrientation];
+    
     if(notification) {
         NSDictionary* keyboardInfo = [notification userInfo];
         CGRect keyboardFrame = [[keyboardInfo valueForKey:UIKeyboardFrameBeginUserInfoKey] CGRectValue];
         animationDuration = [[keyboardInfo valueForKey:UIKeyboardAnimationDurationUserInfoKey] doubleValue];
         
-        if(notification.name == UIKeyboardWillShowNotification)
-            keyboardHeight = keyboardFrame.size.height;
-        else
+        if(notification.name == UIKeyboardWillShowNotification || notification.name == UIKeyboardDidShowNotification) {
+            if(UIInterfaceOrientationIsPortrait(orientation))
+                keyboardHeight = keyboardFrame.size.height;
+            else
+                keyboardHeight = keyboardFrame.size.width;
+        } else
             keyboardHeight = 0;
     } else {
         keyboardHeight = self.visibleKeyboardHeight;
     }
     
-    UIInterfaceOrientation orientation = [[UIApplication sharedApplication] statusBarOrientation];
     CGRect orientationFrame = [UIScreen mainScreen].bounds;
+    CGRect statusBarFrame = [UIApplication sharedApplication].statusBarFrame;
     
     if(UIInterfaceOrientationIsLandscape(orientation)) {
         float temp = orientationFrame.size.width;
         orientationFrame.size.width = orientationFrame.size.height;
         orientationFrame.size.height = temp;
+        
+        temp = statusBarFrame.size.width;
+        statusBarFrame.size.width = statusBarFrame.size.height;
+        statusBarFrame.size.height = temp;
     }
     
     CGFloat activeHeight = orientationFrame.size.height;
     
     if(keyboardHeight > 0)
-        activeHeight += [UIApplication sharedApplication].statusBarFrame.size.height*2;
+        activeHeight += statusBarFrame.size.height*2;
     
     activeHeight -= keyboardHeight;
     CGFloat posY = floor(activeHeight*0.45);
@@ -397,6 +458,52 @@ static SVProgressHUD *sharedView = nil;
 }
 
 
+- (void)showWithStatus:(NSString*)string maskType:(SVProgressHUDMaskType)hudMaskType networkIndicator:(BOOL)show {
+    
+	self.fadeOutTimer = nil;
+	
+    if(show)
+        [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
+    else if(!show && self.showNetworkIndicator)
+        [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
+	
+    self.showNetworkIndicator = show;
+    
+    if(self.showNetworkIndicator)
+        [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
+	
+	self.imageView.hidden = YES;
+    self.maskType = hudMaskType;
+	
+	[self setStatus:string];
+	[self.spinnerView startAnimating];
+    
+    if(self.maskType != SVProgressHUDMaskTypeNone)
+        self.userInteractionEnabled = YES;
+    else
+        self.userInteractionEnabled = NO;
+    
+    [self.overlayWindow makeKeyAndVisible];
+    [self positionHUD:nil];
+    
+	if(self.alpha != 1) {
+        [self registerNotifications];
+		self.hudView.transform = CGAffineTransformScale(self.hudView.transform, 1.3, 1.3);
+		
+		[UIView animateWithDuration:0.15
+							  delay:0
+							options:UIViewAnimationOptionAllowUserInteraction | UIViewAnimationCurveEaseOut | UIViewAnimationOptionBeginFromCurrentState
+						 animations:^{	
+							 self.hudView.transform = CGAffineTransformScale(self.hudView.transform, 1/1.3, 1/1.3);
+                             self.alpha = 1;
+						 }
+						 completion:NULL];
+	}
+    
+    [self setNeedsDisplay];
+}
+
+
 - (void)dismissWithStatus:(NSString*)string error:(BOOL)error {
 	[self dismissWithStatus:string error:error afterDelay:0.9];
 }
@@ -421,17 +528,16 @@ static SVProgressHUD *sharedView = nil;
 	
 	[self.spinnerView stopAnimating];
     
-	if(fadeOutTimer != nil)
-		[fadeOutTimer invalidate], fadeOutTimer = nil;
-	
-	fadeOutTimer = [NSTimer scheduledTimerWithTimeInterval:seconds target:self selector:@selector(dismiss) userInfo:nil repeats:NO];
+	self.progressBarView.hidden = YES;
+    
+	self.fadeOutTimer = [NSTimer scheduledTimerWithTimeInterval:seconds target:self selector:@selector(dismiss) userInfo:nil repeats:NO];
 }
 
 - (void)dismiss {
 	
     if(self.showNetworkIndicator)
         [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
-
+    
 	[UIView animateWithDuration:0.15
 						  delay:0
 						options:UIViewAnimationCurveEaseIn | UIViewAnimationOptionAllowUserInteraction
@@ -442,19 +548,37 @@ static SVProgressHUD *sharedView = nil;
 					 completion:^(BOOL finished){ 
                          if(sharedView.alpha == 0) {
                              [[NSNotificationCenter defaultCenter] removeObserver:sharedView];
-                             [sharedView.previousKeyWindow makeKeyWindow];
+                             overlayWindow = nil;
                              sharedView = nil;
+                             
+                             // find the frontmost window that is an actual UIWindow and make it keyVisible
+                             [[UIApplication sharedApplication].windows enumerateObjectsWithOptions:NSEnumerationReverse usingBlock:^(id window, NSUInteger idx, BOOL *stop) {
+                                 if([window isMemberOfClass:[UIWindow class]]) {
+                                     [window makeKeyWindow];
+                                     *stop = YES;
+                                 }
+                             }];
                              
                              // uncomment to make sure UIWindow is gone from app.windows
                              //NSLog(@"%@", [UIApplication sharedApplication].windows);
+                             //NSLog(@"keyWindow = %@", [UIApplication sharedApplication].keyWindow);
                          }
                      }];
 }
 
 #pragma mark - Getters
 
+- (UIWindow *)overlayWindow {
+    if(!overlayWindow) {
+        overlayWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        overlayWindow.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        overlayWindow.backgroundColor = [UIColor clearColor];
+        overlayWindow.userInteractionEnabled = NO;
+    }
+    return overlayWindow;
+}
+
 - (UIView *)hudView {
-    
     if(!hudView) {
         hudView = [[UIView alloc] initWithFrame:CGRectZero];
         hudView.layer.cornerRadius = 10;
@@ -464,12 +588,10 @@ static SVProgressHUD *sharedView = nil;
         
         [self addSubview:hudView];
     }
-    
     return hudView;
 }
 
 - (UILabel *)stringLabel {
-    
     if (stringLabel == nil) {
         stringLabel = [[UILabel alloc] initWithFrame:CGRectZero];
 		stringLabel.textColor = [UIColor whiteColor];
@@ -483,62 +605,132 @@ static SVProgressHUD *sharedView = nil;
         stringLabel.numberOfLines = 0;
 		[self.hudView addSubview:stringLabel];
     }
-    
     return stringLabel;
 }
 
 - (UIImageView *)imageView {
-    
     if (imageView == nil) {
         imageView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 0, 28, 28)];
 		[self.hudView addSubview:imageView];
     }
-    
     return imageView;
 }
 
 - (UIActivityIndicatorView *)spinnerView {
-    
     if (spinnerView == nil) {
         spinnerView = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
 		spinnerView.hidesWhenStopped = YES;
 		spinnerView.bounds = CGRectMake(0, 0, 37, 37);
 		[self.hudView addSubview:spinnerView];
     }
-    
     return spinnerView;
 }
 
-- (CGFloat)visibleKeyboardHeight {
+- (SVProgressBarView *)progressBarView {
     
+    if (progressBarView == nil) {
+        progressBarView = [[SVProgressBarView alloc] init];
+		[self.hudView addSubview:progressBarView];
+    }
+    
+    return progressBarView;
+}
+
+- (CGFloat)visibleKeyboardHeight {
     UIWindow *keyboardWindow = nil;
     for (UIWindow *testWindow in [[UIApplication sharedApplication] windows]) {
-        if(![[testWindow class] isEqual:[UIWindow class]] && ![[testWindow class] isEqual:[SVProgressHUD class]]) {
+        if(![[testWindow class] isEqual:[UIWindow class]]) {
             keyboardWindow = testWindow;
             break;
         }
     }
-
-    // Locate UIKeyboard.  
-    UIView *foundKeyboard = nil;
-    for (UIView *possibleKeyboard in [keyboardWindow subviews]) {
+    
+    @autoreleasepool {
         
-        UIView *possibleSubKeyboard = possibleKeyboard;
-        // iOS 4 sticks the UIKeyboard inside a UIPeripheralHostView.
-        if ([[possibleSubKeyboard description] hasPrefix:@"<UIPeripheralHostView"]) {
-            possibleSubKeyboard = [[possibleSubKeyboard subviews] objectAtIndex:0];
-        }                                                                                
-        
-        if ([[possibleSubKeyboard description] hasPrefix:@"<UIKeyboard"]) {
-            foundKeyboard = possibleSubKeyboard;
-            break;
-        }
+        // Locate UIKeyboard.  
+        UIView *foundKeyboard = nil;
+        for (UIView *possibleKeyboard in [keyboardWindow subviews]) {
+            
+            UIView *keyboardPretender = nil;
+            // iOS 4 sticks the UIKeyboard inside a UIPeripheralHostView.
+            if ([[possibleKeyboard description] hasPrefix:@"<UIPeripheralHostView"]) {
+                keyboardPretender = [[possibleKeyboard subviews] objectAtIndex:0];
+            }                                                                                
+            
+            if ([[keyboardPretender description] hasPrefix:@"<UIKeyboard"]) {
+                foundKeyboard = keyboardPretender;
+                break;
+            }
+        }    
+        if(foundKeyboard && foundKeyboard.bounds.size.height > 100)
+            return foundKeyboard.bounds.size.height;
+    
     }
-        
-    if(foundKeyboard && foundKeyboard.bounds.size.height > 100)
-        return foundKeyboard.bounds.size.height;
     
     return 0;
 }
 
 @end
+
+#pragma mark - SVProgressBarView Implementation
+
+@implementation SVProgressBarView
+@dynamic progress;
+
+- (id)init {
+    self = [super init];
+    
+    if (self) {
+        self.progress = 0.0f;
+        self.backgroundColor = [UIColor clearColor];
+    }
+    
+    return self;
+}
+
+- (void)setProgress:(CGFloat)newProgress {
+    progress = newProgress;
+    [self setNeedsDisplay];
+}
+
+- (CGFloat)progress {
+    return progress;
+}
+
+- (void)drawRect:(CGRect)rect {
+    CGContextRef ctx = UIGraphicsGetCurrentContext();
+    
+    // draw the "container"
+    CGRect rrect = CGRectInset(self.bounds, 2, 2);
+    CGFloat radius = 8;
+    CGFloat minx = CGRectGetMinX(rrect), midx = CGRectGetMidX(rrect), maxx = CGRectGetMaxX(rrect);
+    CGFloat miny = CGRectGetMinY(rrect), midy = CGRectGetMidY(rrect), maxy = CGRectGetMaxY(rrect);
+    CGContextMoveToPoint(ctx, minx, midy);
+    CGContextAddArcToPoint(ctx, minx, miny, midx, miny, radius);
+    CGContextAddArcToPoint(ctx, maxx, miny, maxx, midy, radius);
+    CGContextAddArcToPoint(ctx, maxx, maxy, midx, maxy, radius);
+    CGContextAddArcToPoint(ctx, minx, maxy, minx, midy, radius);
+    CGContextClosePath(ctx);
+    CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 1);
+    CGContextSetLineWidth(ctx, 2);
+    CGContextDrawPath(ctx, kCGPathStroke);
+    
+    // draw the actual bar
+    radius = 5;
+    rrect = CGRectInset(rrect, 3, 3);
+    rrect.size.width = rrect.size.width * (progress == 0.0 || progress >= 0.055 ? progress : 0.055); // progress bar looks funny for values > 0 but less than 0.055
+    minx = CGRectGetMinX(rrect), midx = CGRectGetMidX(rrect), maxx = CGRectGetMaxX(rrect);
+    miny = CGRectGetMinY(rrect), midy = CGRectGetMidY(rrect), maxy = CGRectGetMaxY(rrect);
+    CGContextMoveToPoint(ctx, minx, midy);
+    CGContextAddArcToPoint(ctx, minx, miny, midx, miny, radius);
+    CGContextAddArcToPoint(ctx, maxx, miny, maxx, midy, radius);
+    CGContextAddArcToPoint(ctx, maxx, maxy, midx, maxy, radius);
+    CGContextAddArcToPoint(ctx, minx, maxy, minx, midy, radius);
+    CGContextClosePath(ctx);
+    CGContextSetRGBFillColor(ctx, 1, 1, 1, 1);
+    CGContextDrawPath(ctx, kCGPathFill);
+}
+
+
+@end
+
