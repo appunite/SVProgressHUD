@@ -25,17 +25,17 @@
 
 @property (nonatomic, readwrite) SVProgressHUDMaskType maskType;
 @property (nonatomic, readwrite) BOOL showNetworkIndicator;
-@property (nonatomic, retain) NSTimer *fadeOutTimer;
+@property (nonatomic, strong) NSTimer *fadeOutTimer;
 
-@property (nonatomic, readonly) UIWindow *overlayWindow;
-@property (nonatomic, readonly) UIView *hudView;
-@property (nonatomic, readonly) UILabel *stringLabel;
-@property (nonatomic, readonly) UIImageView *imageView;
-@property (nonatomic, readonly) UIActivityIndicatorView *spinnerView;
+@property (nonatomic, strong, readonly) UIWindow *overlayWindow;
+@property (nonatomic, strong, readonly) UIView *hudView;
+@property (nonatomic, strong, readonly) UILabel *stringLabel;
+@property (nonatomic, strong, readonly) UIImageView *imageView;
+@property (nonatomic, strong, readonly) UIActivityIndicatorView *spinnerView;
 @property (nonatomic, assign) UIWindow *previousKeyWindow;
-@property (nonatomic, readonly) CGFloat visibleKeyboardHeight;
+@property (nonatomic, assign, readonly) CGFloat visibleKeyboardHeight;
 
-@property (nonatomic, readonly) SVProgressBarView *progressBarView;
+@property (nonatomic, strong, readonly) SVProgressBarView *progressBarView;
 
 - (void)showWithStatus:(NSString*)string maskType:(SVProgressHUDMaskType)hudMaskType indicatorType:(SVProgressHUDIndicatorType)indicatorType networkIndicator:(BOOL)show;
 - (void)setStatus:(NSString*)string;
